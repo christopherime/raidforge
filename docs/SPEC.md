@@ -1,6 +1,6 @@
 # raidforge — Specification
 
-> Status: **draft v0.2** · Target: **Midnight Season 1** (Mythic) · Last updated by design discussion.
+> Status: **draft v0.3** · Target: **Midnight Season 1** (Mythic) · Last updated by design discussion.
 
 ## 1. Problem statement
 
@@ -21,7 +21,8 @@ because each boss weights the objective differently.
 
 | Area                       | Decision                                                                          |
 | -------------------------- | --------------------------------------------------------------------------------- |
-| Roster source              | **wowaudit API** (per-team key) — ingest the guild roster                         |
+| Authentication             | **Blizzard SSO** (Battle.net OAuth2, `wow.profile` scope) — log in, discover characters |
+| Roster source              | **Blizzard WoW Profile API** (character → guild → Guild Roster); wowaudit optional enrichment |
 | Performance / best-spec    | **Warcraft Logs API** (v2 GraphQL, OAuth2 client-credentials)                     |
 | Composition/meta reference | **Raider.IO API** (guild progression + comp reference)                            |
 | Buff/debuff data           | **Static, researched** dataset in `data/` (Midnight seed in §3.3)                 |
@@ -132,27 +133,58 @@ comp leaves a hard/high-value gap, report the **marginal value of adding archety
 
 **Output per boss:** chosen 20 + bench list + ranked recruitment suggestions + coverage report.
 
-## 5. Data sourcing — multi-connector architecture
+## 5. Authentication & roster discovery
+
+### 5.1 Blizzard SSO login flow
+
+raidforge authenticates users via **Battle.net OAuth2** (Authorization Code grant, scope
+`wow.profile`). On login we:
+
+1. Call the **Account Profile Summary** (`/profile/user/wow`, user token + `wow.profile`)
+   to enumerate **all the user's WoW characters** (name, realm, class, level).
+2. For each character of interest, resolve its **guild** via the Character Profile, then
+   pull the **Guild Roster** (`/data/wow/guild/{realm}/{guild}/roster`, client-credential
+   token) to get the full member list.
+3. Per member, fetch **Character Specializations** to know which specs they have.
+
+This makes login the entry point that *discovers characters → infers guild → builds the
+roster* with zero manual entry.
+
+### 5.2 Multiple characters → multiple rosters
+
+A user can **designate one or more of their characters**, each typically in a different
+guild, to manage **multiple distinct rosters**. The app stores the user's selected
+characters; each selected character's guild is a separately optimizable roster, and the
+user switches between them. (This resolves the earlier multi-guild question: yes — accounts
+with multiple rosters.)
+
+> Blizzard data gives *who is in the guild* and *what specs a character has talented* — but
+> **not** which specs a player is *willing* to play, nor attendance. That "eligible spec set"
+> is filled by **manual edits** and optionally **wowaudit** enrichment.
+
+## 5a. Data sourcing — multi-connector architecture
 
 Each external source is wrapped behind a Go `connectors` interface (mockable, cacheable,
-rate-limit-aware). Four sources, each owning a distinct slice of the problem:
+rate-limit-aware). Sources, each owning a distinct slice of the problem:
 
 | Connector                       | Owns                                                                                                                     | Auth                                                              | Notes                                                                                       |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| **wowaudit**                    | **Guild roster** — players, their characters, class/spec, role, who can play what                                        | Per-team API key (Bearer)                                         | The user connects their guild's wowaudit team; we ingest the roster instead of manual entry |
-| **Raider.IO**                   | **Composition/meta reference** — guild raid progression and the comps top guilds run                                     | Public API, key optional                                          | Used to inform per-boss meta rankings and "what comps work" sanity checks                   |
+| **Blizzard** (SSO + WoW Profile)| **Identity + roster** — the user's characters, their guild(s), guild member list, per-character talented specs           | OAuth2: user token (`wow.profile`) + client-credential token      | Primary roster source; see §5.1–5.2. Region-aware (`profile-{region}` namespace)            |
+| **wowaudit** (optional)         | **Roster enrichment** — willing/alt specs, attendance, roles the guild already tracks                                    | Per-team API key (Bearer)                                         | Augments Blizzard data with info Blizzard doesn't expose; user connects their team key      |
+| **Raider.IO**                   | **Composition/meta reference** — guild raid progression and the comps top guilds run                                     | Public API, key optional                                          | Informs per-boss meta rankings and "what comps work" sanity checks                          |
 | **Warcraft Logs** (v2 GraphQL)  | **Best specs & performance** — per-player/per-boss parse percentiles, spec meta statistics                               | OAuth2 client-credentials (`WCL_CLIENT_ID` / `WCL_CLIENT_SECRET`) | Point-based rate limits → cache aggressively, batch queries. The primary "best spec" signal |
 | **Static `data/`** (researched) | **Coverage matrix** — raid buffs/debuffs, lust, brez, utility (see §3.3); class/spec list; boss list + profiles per tier | none (ships in repo)                                              | Single source of truth for buff/debuff; versioned per patch                                 |
 
-**Flow:** wowaudit defines *who's available and what they can play* → Warcraft Logs scores
-*how well each plays each spec per boss* → Raider.IO + static meta rankings inform *what's
-good on this boss* → the static coverage matrix enforces *buff/debuff/utility completeness*.
-The optimizer (§4) combines all four per boss.
+**Flow:** Blizzard SSO defines *who's in the roster and what specs they have* → wowaudit/manual
+add *what they're willing to play* → Warcraft Logs scores *how well each plays each spec per
+boss* → Raider.IO + static meta rankings inform *what's good on this boss* → the static coverage
+matrix enforces *buff/debuff/utility completeness*. The optimizer (§4) combines all per boss.
 
-**Credential model:** WCL needs registered API credentials (deployment secrets). wowaudit
-needs the guild's own team API key, supplied by the user at connect-time. Raider.IO works
-keyless for our needs. Exact wowaudit/Raider.IO endpoint paths to be confirmed against
-their live docs during connector implementation.
+**Credential model:** Blizzard needs a registered API client (`BLIZZARD_CLIENT_ID` /
+`BLIZZARD_CLIENT_SECRET`, deployment secrets) — used for both the OAuth login redirect and
+client-credential Game/Profile calls. WCL needs its own registered credentials. wowaudit
+uses the guild's own team key, supplied by the user at connect-time. Raider.IO is keyless.
+Exact wowaudit/Raider.IO endpoint paths to be confirmed against live docs at implementation.
 
 ## 6. Monorepo structure (mirrors cartomancer)
 
@@ -162,11 +194,13 @@ raidforge/
 │   ├── cmd/raidforge/         HTTP server entrypoint
 │   ├── internal/
 │   │   ├── config/            CUE-backed config (weights, tunables)
+│   │   ├── auth/              Battle.net OAuth (login, token refresh, sessions)
 │   │   ├── domain/            classes, specs, buffs, roles
-│   │   ├── roster/            roster ingest, player/spec model
+│   │   ├── roster/            roster ingest, player/spec model, multi-roster selection
 │   │   ├── boss/              tier + per-boss profiles
 │   │   ├── optimizer/         heuristic + exact solvers
-│   │   ├── connectors/        Warcraft Logs / (future) Raidbots
+│   │   ├── connectors/        Blizzard / wowaudit / Warcraft Logs / Raider.IO
+│   │   ├── store/             persistence (users, sessions, selected rosters, WCL cache)
 │   │   └── server/            HTTP handlers, API
 │   └── pkg/                   exported helpers (if any)
 ├── frontend/                 Next.js — roster input, per-boss comp board, suggestions
@@ -180,19 +214,27 @@ raidforge/
 
 | Method | Path                       | Purpose                                                                                                       |
 | ------ | -------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `POST` | `/api/connect/wowaudit`    | store the guild's wowaudit team key, pull roster                                                              |
-| `GET`  | `/api/roster`              | current roster (players + eligible specs, from wowaudit)                                                      |
-| `POST` | `/api/roster`              | manual override / edit roster                                                                                 |
+| `GET`  | `/api/auth/login`          | start Battle.net OAuth redirect (`wow.profile`)                                                               |
+| `GET`  | `/api/auth/callback`       | OAuth callback → create session, discover characters                                                          |
+| `POST` | `/api/auth/logout`         | end session                                                                                                   |
+| `GET`  | `/api/me/characters`       | the logged-in user's WoW characters (from Blizzard)                                                           |
+| `POST` | `/api/rosters`             | designate a character/guild as a managed roster                                                               |
+| `GET`  | `/api/rosters`             | list the user's managed rosters (multi-guild)                                                                 |
+| `GET`  | `/api/rosters/{id}`        | one roster (members + eligible specs); refreshes from Blizzard guild roster                                  |
+| `POST` | `/api/rosters/{id}`        | manual edit (willing specs, add/remove) + optional wowaudit enrich                                            |
+| `POST` | `/api/connect/wowaudit`    | attach the guild's wowaudit team key to enrich a roster                                                       |
 | `GET`  | `/api/tiers/{tier}/bosses` | list bosses + profiles for a tier                                                                             |
-| `POST` | `/api/optimize/{boss}`     | run optimizer for one boss (body: raid size, solver=heuristic\|exact) → comp + bench + suggestions + coverage |
-| `POST` | `/api/optimize`            | run all bosses in the tier (batch)                                                                            |
+| `POST` | `/api/optimize/{boss}`     | one boss (body: roster id, raid size, solver=heuristic\|exact) → comp + bench + suggestions + coverage        |
+| `POST` | `/api/optimize`            | all bosses in the tier for a roster (batch)                                                                   |
 | `GET`  | `/api/wcl/parses?...`      | proxy/cache Warcraft Logs lookups (best-spec scores)                                                          |
 | `GET`  | `/api/raiderio/guild?...`  | proxy/cache Raider.IO guild progression/comp reference                                                        |
 | `GET`  | `/healthz`                 | k8s probe                                                                                                     |
 
 ## 8. Frontend (Next.js)
 
-- **Roster editor**: add players, tag eligible specs, pull/refresh WCL parses.
+- **Login**: "Sign in with Battle.net" → character discovery screen.
+- **Roster switcher**: pick which character/guild roster to manage (multi-guild).
+- **Roster editor**: review discovered members, tag willing/eligible specs, pull/refresh WCL parses.
 - **Boss board**: tabs per boss; shows the optimal 20, bench, coverage checklist
   (green/red per category), and recruitment suggestions.
 - **Solver toggle**: heuristic (live) vs "prove optimal" (exact).
@@ -210,14 +252,17 @@ raidforge/
 
 ## 10. Open questions
 
-1. **Credentials on hand** — (a) Warcraft Logs API client (ID/secret), (b) a wowaudit
-   team API key to test the roster connector? Determines what we can wire end-to-end now
-   vs. mock.
-2. **Persistence** — store the connected wowaudit key + cached WCL parses server-side
-   (DB), or per-session for v1? (Caching WCL is strongly advised given rate limits.)
-3. **Multi-guild / auth** — single-guild tool, or accounts + multiple guild rosters?
+1. **Credentials on hand** — (a) **Blizzard API client** (ID/secret, with an OAuth redirect
+   URL registered at develop.battle.net) — required for SSO; (b) Warcraft Logs API client;
+   (c) optional wowaudit team key. Determines what we wire live vs. mock.
+2. **Persistence is now required** (multi-user + multi-roster + OAuth tokens). Pick a store:
+   Postgres (matches your stack?) vs. SQLite for v1. Also caches WCL parses (rate limits).
+3. ~~Multi-guild / auth~~ — **resolved**: Blizzard SSO accounts, multiple rosters (§5.2).
 4. **Healer-count policy** — let the optimizer choose healer count within a boss-defined
    range, or fix it per boss?
 5. **Deploy host** — confirm `raidforge.geekxflood.io` and the geekxflood GitOps wiring.
-6. **wowaudit/Raider.IO endpoint shapes** — confirm exact paths/fields against live docs
+   Note: the Battle.net OAuth redirect URL must match the deployed host.
+6. **Region scope** — single region (EU/US) or multi-region? Affects Blizzard namespace
+   handling and which WCL/Raider.IO realms we query.
+7. **wowaudit/Raider.IO endpoint shapes** — confirm exact paths/fields against live docs
    when implementing connectors (couldn't fully scrape; both are JS-rendered docs).
