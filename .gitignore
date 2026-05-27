@@ -11,3 +11,7 @@ node_modules/
 *.temp
 .claude
 CLAUDE.local.md
+
+# Go build artifacts
+/bin/
+*.out

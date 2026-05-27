@@ -1,20 +1,24 @@
-# Static site served by an unprivileged nginx (listens on :8080, runs as uid 101).
-FROM nginxinc/nginx-unprivileged:1.27-alpine
+# Multi-stage build: compile the Go backend, ship a minimal non-root image.
+# The frontend build stage is added in a later milestone (see TODO Phase 9).
+ARG GO_VERSION=1.26
 
-# Build ref stamped into asset URLs for cache-busting (CI passes the short SHA).
+FROM golang:${GO_VERSION}-alpine AS build
+WORKDIR /src
+# Copy the module sources (backend/ holds go.mod and the Go code).
+COPY backend/ ./
+RUN go mod download
+# BUILD_REF is the version stamp; CI passes the short commit SHA.
 ARG BUILD_REF=dev
+ENV CGO_ENABLED=0
+RUN go build -ldflags "-s -w -X main.version=${BUILD_REF}" -o /out/raidforge ./cmd/raidforge
 
-# Custom config: serve on 8080 with a /healthz endpoint for k8s probes.
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-
-# Static assets.
-COPY index.html /usr/share/nginx/html/index.html
-COPY assets /usr/share/nginx/html/assets
-
-# Version the asset query strings so each deploy is a fresh cache key at the
-# browser AND Cloudflare's edge (which caches .css/.js by extension for hours).
-USER root
-RUN sed -i "s/__BUILD__/${BUILD_REF}/g" /usr/share/nginx/html/index.html
-USER 101
-
+FROM alpine:3
+# ca-certificates for outbound HTTPS to the Blizzard / WCL / Raider.IO APIs (later milestones).
+RUN apk add --no-cache ca-certificates && adduser -D -u 10001 raidforge
+USER raidforge
+COPY --from=build /out/raidforge /usr/local/bin/raidforge
 EXPOSE 8080
+# busybox wget (bundled in alpine) hits the in-process health probe.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1
+ENTRYPOINT ["raidforge"]

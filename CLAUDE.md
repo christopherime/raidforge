@@ -5,106 +5,92 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 raidforge computes the **optimal 20-player Mythic World of Warcraft raid composition, per boss**,
-from a guild's real roster, Warcraft Logs performance, and a researched raid buff/debuff coverage
-matrix — and emits bench lists and recruitment suggestions when the roster is short or missing
-coverage. Target game version: **Midnight, Season 1**.
+from a guild's real roster, Warcraft Logs performance, and a researched raid buff/debuff +
+capability matrix — and emits bench lists and recruitment suggestions when the roster is short or
+missing coverage. Target game version: **Midnight, Season 1** (raid: Voidspire).
 
-## Status: pre-implementation — read these first
+## Status: implementation in progress (toward the v0.5.0 MVP)
 
-**No application code exists yet.** The repo currently holds only documentation and config files
-(copied from a sibling static-site project). Design and conventions are locked; the build has not
-started. Before writing anything, read both:
+Versioning is semver, tagged from `v0.0.1`. **v0.5.0** = a working MVP (domain data + optimizer +
+API over a sample roster); **v1.0.0** = first stable release with all components (auth, connectors,
+persistence, frontend). The phased plan is in `TODO.md` (Phase 0–11).
 
-- **`docs/SPEC.md`** — the design ("what & why"): domain model, optimizer objective, connectors, API. Decisions here are locked.
-- **`TODO.md`** — the build playbook ("how"): conventions, gotchas, external-API integration notes, and an ordered phased plan (Phase 0–11). This is the authoritative working context.
+The design is the source of truth — read both before changing behaviour:
+- **`docs/SPEC.md`** — design ("what & why"): domain model, capabilities, optimizer objective, connectors, API.
+- **`TODO.md`** — build playbook ("how"): conventions, gotchas, external-API notes, ordered phases.
 
-When those two and this file disagree with the code, the code wins — but right now there is no code,
-so SPEC/TODO are the source of truth. Keep them updated as the design evolves.
+What exists so far: the Go backend scaffold (`backend/`, module `github.com/christopherime/raidforge`)
+— a minimal HTTP server with `/healthz` — plus build tooling (Makefile, multi-stage Dockerfile) and
+the `data/` dataset plan. The optimizer, domain data, connectors, auth, persistence and frontend are
+not built yet.
 
 ## Architecture (target — see SPEC.md §6 for the full tree)
 
-Monorepo mirroring sibling geekxflood projects:
-
-```
+```txt
 backend/    Go module github.com/christopherime/raidforge (Go 1.26.x)
   cmd/raidforge/   HTTP server entrypoint (serves API + built frontend, :8080, /healthz)
-  internal/        config(CUE) · auth(Battle.net OAuth) · domain · roster · boss · optimizer · connectors · store · server
-frontend/   Next.js (TypeScript, App Router) — login, roster switcher, per-boss comp board
-data/       versioned datasets: coverage matrix, classes/specs, per-tier boss profiles
-chart/      Helm chart (or lives in the external geekxflood/helm-charts repo — see Deployment)
+  internal/        config(CUE) · auth · domain · roster · boss · optimizer · connectors · store · server
+frontend/   JS frontend (framework unresolved — see gotchas)
+data/       versioned datasets: capability/coverage matrix, classes/specs, per-tier boss profiles
+chart/      Helm chart (or external geekxflood/helm-charts repo)
 docs/       SPEC.md + ADRs
 ```
 
-**Data flow** (each external source owns one slice of the problem; all wrapped behind mockable
-`connectors` interfaces): Blizzard SSO → *who's in the guild + their talented specs* → Warcraft Logs
-v2 GraphQL → *how well each player performs each spec per boss* → Raider.IO → *meta/comp reference* →
-static `data/` matrix → *required buff/debuff/utility coverage*. The optimizer combines all of these
-**per boss**.
+Data flow: Blizzard SSO → roster + talented specs + **race**; Warcraft Logs → per-player/spec/boss
+throughput **and the class/spec makeup of real kills**; Raider.IO → meta reference; static `data/` →
+capability/coverage matrix. The optimizer combines all per boss. Willing specs + attendance come
+from manual edits / wowaudit.
 
-Two facts Blizzard does **not** provide — which specs a player is *willing* to play, and attendance —
-come from manual roster edits and optional **wowaudit** enrichment.
+### Keystones (easy to violate, expensive to undo)
 
-### Two architectural keystones (easy to violate, expensive to fix later)
+1. **Version-agnostic, data-driven engine.** All patch-volatile WoW knowledge — buffs, debuffs,
+   capabilities, providers, boss profiles, meta — lives in versioned `data/`, the single source of
+   truth. Capabilities are an **open ID registry**; new spells/bosses/seasons are *data, not code*.
+   Never hardcode game facts in Go.
 
-1. **The engine is version-agnostic and data-driven.** All patch-volatile WoW knowledge — raid
-   buffs, damage-amp debuffs, Bloodlust/battle-res providers, per-boss profiles and meta rankings —
-   lives in versioned files under `data/`, the single source of truth. **Never hardcode these values
-   in Go.** The Midnight 12.x seed values are tabulated in SPEC.md §3.3 and TODO.md §3.
+2. **The optimizer is the core.** Per boss, pick 20 of the roster and assign each an eligible spec,
+   maximizing throughput + weighted coverage − penalties. Two solvers: heuristic (live) + exact
+   ILP/B&B ("prove optimal"). Weights are CUE config.
 
-2. **The optimizer is the core value.** Per boss, it selects a subset of the roster (= 20) and
-   assigns each player an eligible spec, under hard constraints (exact size 20; tank/healer minimums;
-   one slot per player; spec ∈ player's eligible set; boss-mandated coverage), maximizing
-   `Σ throughput + weighted(buff, debuff, meta, utility coverage) − penalties`. Optimizer weights are
-   CUE config, tunable without a rebuild. Two switchable solvers: a **heuristic** (greedy + local
-   search) for live UI feedback, and an **exact** ILP/branch-and-bound solver behind a "prove optimal"
-   action (tractable because rosters are small, ≤ ~30 players). When no legal/complete comp exists, it
-   does gap analysis → quantified recruitment suggestions ("Add a Demon Hunter → +3% raid magic damage").
+3. **Capabilities are soft; the logs outrank theory.** Capability/spell coverage is a *weighted
+   priority, never a hard constraint* — only structural legality is hard (size 20, role mins, one
+   slot/player, spec eligibility). Comps that actually killed a boss in Warcraft Logs get a priority
+   boost (`w_empirical`) that can outrank the theoretical "ideal." **Do not reintroduce hard
+   capability gates.** (SPEC §3.3, §3.6, §4.)
 
 ## Conventions that will bite if ignored
 
-These come from the surrounding geekxflood homelab ecosystem (TODO.md §6); deviating breaks the fit.
-
-- **Go module path is `github.com/christopherime/raidforge`, Go 1.26.x.** Local references for this
-  pattern: `../droidfarm` (Go module + version) and `../schedularr`, `../athena` (CUE config).
-- **CI uses only `actions/*` GitHub actions plus raw `docker` shell commands** — never `docker/*` or
-  other third-party actions (the cluster's self-hosted runners can't reliably fetch them). See
-  `.github/workflows/build.yaml`; it already derives the image name from the repo, so no edits are
-  needed. **Do not move the repo under the GxF org** — org Actions are suspended, so everything
-  publishes from the personal `christopherime` account/registry (`ghcr.io/christopherime/raidforge`).
-- **`Dockerfile` and `nginx.conf` are static-site leftovers and must be replaced** (TODO Phase 9).
-  The real Dockerfile will be multi-stage (build Next.js → build Go → minimal image), **unprivileged**,
-  listening on **`:8080`** with a **`/healthz`** probe. `nginx.conf` is expected to be removed.
-- **App config is CUE-backed** (matching `schedularr`/`athena`), not env-only — used for tunable
-  optimizer weights.
-- **Deployment is GitOps via ArgoCD, and the chart/Application live in *external* repos**, not here:
-  Helm chart → `geekxflood/helm-charts`, ArgoCD Application → `geekxflood/applicationset`. Host:
-  `raidforge.geekxflood.io`. Unlike the static-site origin, raidforge needs secrets (Blizzard/WCL
-  client creds, `SESSION_SECRET`, `DATABASE_URL`) and a database (Postgres recommended).
-- **Commit discipline:** branch off `main`; commit/push only when the user asks.
+- **Go module `github.com/christopherime/raidforge`, Go 1.26.x.** Local refs: `../droidfarm`
+  (module + Go version), `../schedularr` & `../athena` (CUE config, HTTP server, Dockerfile).
+- **CI uses only `actions/*` + raw `docker` shell commands** — never `docker/*` or third-party
+  actions. Don't move the repo under the GxF org (org Actions suspended → publishes from personal
+  `christopherime` → `ghcr.io/christopherime/raidforge`). The Docker build takes
+  `--build-arg BUILD_REF=<short-sha>` for the version stamp.
+- **App config is CUE-backed** (the real template is `../schedularr/internal/cueconfig`).
+- **Deployment is GitOps via ArgoCD**; the Helm chart + Application live in the external
+  `geekxflood/helm-charts` and `geekxflood/applicationset` repos. Needs secrets (Blizzard/WCL creds,
+  `SESSION_SECRET`, `DATABASE_URL`) + a database.
+- **Commit discipline:** semver tags from `v0.0.1`; the user has authorized commit + push for this
+  build. Commit footer: `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>`.
 
 ## Building, linting, testing
 
-There is **no build/test tooling yet** (no `go.mod`, no `frontend/package.json`, no Makefile/Taskfile).
-TODO Phase 0 calls for a root Makefile or Taskfile mirroring the sibling projects. Until then:
+- `make build` — compile backend to `bin/raidforge` (wraps `go -C backend`).
+- `make test` — `go test -race ./...` in backend.
+- `make vet` / `make lint` — `go vet` / `golangci-lint run`.
+- `make run` — build and run the server (`:8080`, `GET /healthz` → `ok`).
+- `yamllint .` — YAML lint (config `.yamllint.yaml`, max line 120; ignores `chart/templates/`).
+- CI (`.github/workflows/build.yaml`) builds the Dockerfile on push to `main` and on `v*.*.*` tags
+  (skips Markdown-only pushes), pushing `ghcr.io/christopherime/raidforge`.
 
-- **YAML lint** is the only configured tooling present: `yamllint .` (config in `.yamllint.yaml`,
-  max line length 120). Note its `ignore:` still lists `charts/droidfarm/templates/` — a stale
-  copy-paste from another repo; update to the raidforge chart path if a local `chart/` is added.
-- Once scaffolded, expect standard Go (`go test ./...`, `golangci-lint run`) and Next.js
-  (`lint`, `build`) commands wired through the root build file — add them here when they exist.
-- CI build (`.github/workflows/build.yaml`) skips on Markdown-only changes (`paths-ignore: **.md`).
+## Local environment & known gotchas
 
-## Local environment notes
-
-- This checkout is at `/Users/christophe/raidforge`. TODO.md refers to `/home/cri/raidforge` and to
-  sibling reference projects under `/home/cri/` — paths from another machine.
-- Of the referenced siblings, **`cartomancer` (the primary layout reference) and `bench` are absent
-  on this machine**; `droidfarm`, `schedularr`, and `athena` are present as `../` siblings and are the
-  usable local references for module path, Go version, and CUE patterns.
-- TODO.md §1 claims `.claude/settings.json`, `skills-lock.json`, and `.agents/skills/impeccable/`
-  already exist — **they do not** in this checkout (`.claude/` contains only `agents/`). Don't rely on
-  them being present.
-- `CLAUDE*` and `.claude` are listed in `.gitignore`, so this file is intentionally untracked
-  (local-only). Adjust `.gitignore` if you want it committed.
-- The frontend is meant to use the vendored **`impeccable`** design skill for polished UI (per TODO),
-  though it is not vendored in this checkout yet.
+- This checkout is `/Users/christophe/raidforge`. TODO.md's `/home/cri/...` paths are from another machine.
+- Sibling references present locally: `../droidfarm`, `../schedularr`, `../athena`. The docs'
+  `cartomancer` and `bench` are **absent** here. athena is the closest HTTP-server + frontend +
+  Dockerfile analog; schedularr is the CUE-config + connector-pattern reference.
+- Toolchain present: Go 1.26.3, node 26, cue 0.16.1, docker 29.5.2, helm 4.2.0, golangci-lint 2.12.2.
+- `CLAUDE.md` is tracked; only `CLAUDE.local.md` and `.claude/` are gitignored.
+- **Frontend framework is unresolved:** SPEC says Next.js, but the "single Go binary serves the
+  built frontend" packaging goal fits the house Vite+React SPA (athena) better. Decide before
+  scaffolding `frontend/`.

@@ -10,9 +10,10 @@ buff/debuff coverage and the per-boss meta — and tells you exactly **who to be
 when you're short or missing coverage, **which class to recruit and why**.
 
 > [!NOTE]
-> **Status: early design / pre-implementation.** The architecture and domain model are
-> locked (see [`docs/SPEC.md`](docs/SPEC.md)); the build is tracked in
-> [`TODO.md`](TODO.md). Code is not written yet. This README describes the target system.
+> **Status: early implementation — building toward the v0.5.0 MVP.** The architecture and
+> domain model are locked (see [`docs/SPEC.md`](docs/SPEC.md)); the build is tracked in
+> [`TODO.md`](TODO.md). Versioning is semver from `v0.0.1` (v0.5.0 = working MVP, v1.0.0 =
+> first stable release). This README describes the target system.
 
 ---
 
