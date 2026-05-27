@@ -1,0 +1,32 @@
+---
+# raidforge configuration — every value shown is the built-in default.
+# Run with: raidforge -config configs/raidforge.yaml
+server:
+  addr: ":8080"
+  read_timeout: "30s"
+  write_timeout: "30s"
+  idle_timeout: "120s"
+  shutdown_grace: "10s"
+
+logging:
+  level: "info"   # debug | info | warn | error
+  format: "json"  # json | text
+
+data:
+  dir: "data"
+  tier: "midnight-s1"
+
+# Optimizer objective weights and penalties (SPEC §4); tunable without a rebuild.
+# A high `empirical` lets compositions proven in Warcraft Logs kill data outrank
+# the theoretical "ideal" (SPEC §3.6).
+optimizer:
+  weights:
+    throughput: 1.0
+    buff: 5.0
+    debuff: 5.0
+    meta: 2.0
+    capability: 3.0
+    empirical: 8.0
+  penalties:
+    role_imbalance: 10.0
+    bench_top: 1.0
