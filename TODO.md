@@ -100,17 +100,28 @@ to play** — alt-spec flexibility is the optimizer's main lever.
 | Mystic Touch  | Monk         | +5% physical damage taken                                                    |
 | Hunter's Mark | Hunter       | +3% all damage taken — **Midnight change**: now raid-wide, consistent uptime |
 
-### 3.5 Critical utility (count / presence matters)
+### 3.5 Capabilities (the unified utility model)
 
-- **Bloodlust/Heroism (lust):** Shaman (Bloodlust/Heroism), Mage (Time Warp), Hunter pet
-  (Primal Rage), Evoker (Fury of the Aspects). Require ≥1; redundancy valued.
-- **Battle Resurrection:** Druid (Rebirth), Warlock (Soulstone), Death Knight (Raise Ally),
-  Paladin (Intercession). Count matters.
-- **Dispels by school** (Magic/Curse/Poison/Disease) + **Enrage soothe** — some bosses
-  hard-require a specific type.
-- **Raid defensive CDs:** Priest Barrier, DH Darkness, Shaman Spirit Link, Warrior Rallying
-  Cry, Paladin Aura Mastery, DK Anti-Magic Zone.
-- **Immunities / soaks / external CDs / interrupts / movement** — boss-mechanic specific.
+Every boss-relevant ability is a **capability**: an ID + provider rules in `data/` that a boss can
+**prioritize**. One open, data-driven registry replaces the old separate lists (lust, brez,
+dispels, interrupts, soaks, immunities, raid defensives, movement). **Soft, never hard blockers**
+(§4). Provider scope: **spec** / **class** / **race** (from Blizzard, e.g. Arcane Torrent →
+interrupt) / **player** (manual: professions, one-offs). A player's caps = union over those for
+their assigned spec. Dispels carry a **direction**: *friendly* (off an ally, by school) vs
+*offensive* (strip a buff/enrage **off an enemy** — purge/spellsteal/soothe).
+
+Midnight seed (illustrative; `data/` authoritative, re-verify each patch):
+
+- `lust` — Shaman, Mage (Time Warp), Hunter pet (Primal Rage), Evoker.
+- `battle_rez` — Druid, Warlock, Death Knight, Paladin.
+- `dispel.friendly.{magic,curse,poison,disease}` — by class/spec.
+- `dispel.offensive.magic` — Mage (Spellsteal), Priest (Dispel Magic), Shaman (Purge). *(e.g. a Voidspire boss values purging a buff off the boss.)*
+- `dispel.offensive.enrage` — Druid (Soothe), Hunter (Tranq Shot).
+- `interrupt` — most melee/casters; Blood Elf (Arcane Torrent).
+- `raid_defensive` — Priest Barrier, DH Darkness, Shaman Spirit Link, Warrior Rallying Cry, Paladin Aura Mastery, DK AMZ.
+- `immunity` / `soak` / `external_cd` / `movement` — boss-mechanic specific.
+
+> Only **scarce** capabilities sway the comp; ones every player has (generic soaks, potions) don't.
 
 ### 3.6 Boss profile (per boss, in `data/`)
 
@@ -119,11 +130,22 @@ Each boss carries weights/flags that reshape the optimizer objective:
 - Damage-pattern weights: single-target vs cleave vs sustained-AoE.
 - Magic-vs-physical raid-damage split → sets relative value of Chaos Brand vs Mystic Touch.
 - Healing intensity → drives healer count (4/5/6).
-- Required/valued utility: dispel types, immunities, soak count, lust timing, expected brez.
+- **Capability priorities** (§3.5): capabilities this boss values, each weighted + optional count (e.g. `dispel.offensive.magic` high, `≥1`). **Soft, not gates.** Plus lust timing, expected brez.
 - Per-boss meta-spec rankings (a spec can be S-tier on one boss, C-tier on another).
 
-> **Research gap:** the exact Midnight S1 raid (boss list) and per-boss profiles still need
-> sourcing/curation. The buff/debuff matrix above is verified; boss profiles are TBD content.
+> **Research gap:** the **Voidspire** (Midnight S1) boss list and per-boss profiles — including each
+> boss's weighted capability priorities — still need sourcing/curation. The buff/debuff + capability
+> *provider* matrix is verified; boss *requirements* are TBD content.
+
+### 3.7 Empirical prior & future-proofing
+
+- **Proven beats ideal.** Per boss, pull the class/spec makeup of real WCL kills and reward comps
+  that resemble them (`w_empirical`); this can outweigh theoretical capability coverage. Capability
+  coverage is **soft, never a hard blocker** — a comp that killed the boss in the logs must stay
+  selectable.
+- **Future content = data, not code.** Capabilities are an open ID registry in `data/`; tiers live
+  under `data/tiers/<expansion>-s<n>/`. Adding Midnight S2 (new bosses, spells, capabilities) is a
+  data change. Go types stay generic (`Capability`, `BossProfile`), so no hard recode per season.
 
 ---
 
@@ -159,17 +181,18 @@ raidforge/
 **Problem:** select a subset of roster players (= 20) and assign each an eligible spec,
 **per boss**.
 
-- **Hard constraints:** exact size 20; tank/healer minimums; one player ≤ one slot; spec ∈
-  player's eligible set; any boss-flagged *mandatory* coverage (e.g. a required dispel).
+- **Hard constraints (structural only):** exact size 20; tank/healer minimums; one player ≤ one
+  slot; spec ∈ player's eligible set. Capability coverage is **soft/weighted, never a hard gate**.
 - **Objective (maximize):**
 
   ```txt
   score = Σ player_throughput(spec, boss)
-        + w_buff   · buff_coverage_completeness
-        + w_debuff · (chaos_brand?·magicWeight + mystic_touch?·physWeight)
-        + w_meta   · meta_alignment(specs, boss)
-        + w_util   · satisfied_optional_utility
-        − penalties(missing soft coverage, role imbalance, benching a top performer)
+        + w_buff      · buff_coverage_completeness
+        + w_debuff    · (chaos_brand?·magicWeight + mystic_touch?·physWeight)
+        + w_meta      · meta_alignment(specs, boss)
+        + w_caps      · Σ capability_weight(boss) · satisfied?      // soft — never a gate
+        + w_empirical · similarity(comp, proven WCL kill comps)     // can be set to dominate
+        − penalties(role imbalance, benching a top performer)
   ```
 
   Weights live in CUE config.
@@ -292,11 +315,15 @@ These are derived from the existing geekxflood projects; deviating breaks the ho
 
 ### Phase 2 — Domain model + static data
 
-- [ ] `internal/domain` — types: Class, Spec, Role, Buff, Debuff, UtilityCategory, Player.
-- [ ] `data/classes.{cue,json}` — 13 classes, specs, roles.
-- [ ] `data/coverage.{cue,json}` — the §3.3–3.5 matrix (Midnight seed).
-- [ ] `data/tiers/midnight-s1/bosses.{cue,json}` — boss list + per-boss profiles (§3.6).
-      **Needs content research/curation** (boss list, magic/phys weights, healer counts).
+- [ ] `internal/domain` — generic, content-agnostic types: Class, Spec, Role, Race, Buff, Debuff,
+      **Capability** (open ID registry; provider scope spec/class/race/player; dispel direction
+      friendly/offensive; linked spells), Player. Capability *resolution* (union over a player's
+      class/spec/race/manual) lives here.
+- [ ] `data/classes.{cue,json}` — 13 classes, specs, roles, **race→capability** table.
+- [ ] `data/coverage.{cue,json}` — §3.3–3.5 incl. the **capabilities → providers** registry (Midnight seed).
+- [ ] `data/tiers/midnight-s1/bosses.{cue,json}` — Voidspire boss list + per-boss profiles (§3.6),
+      each with **weighted capability priorities** (soft). **Needs content research/curation**
+      (boss list, magic/phys weights, healer counts).
 - [ ] Loader + validation (fail fast on malformed data).
 
 ### Phase 3 — Authentication (Blizzard SSO)
@@ -312,8 +339,9 @@ These are derived from the existing geekxflood projects; deviating breaks the ho
 - [ ] Define `connectors` interfaces (so each is mockable).
 - [ ] **Blizzard** connector — Account Profile (characters), Character Profile (guild/spec),
       Guild Roster, Specializations. Region-aware. Caching.
-- [ ] **Warcraft Logs** connector — client-credential token, GraphQL queries for parses +
-      meta stats. Cache in `store`.
+- [ ] **Warcraft Logs** connector — client-credential token, GraphQL queries for parses, meta
+      stats, **and kill-comp data** (class/spec makeup of successful kills → empirical prior §3.6).
+      Cache in `store`.
 - [ ] **Raider.IO** connector — guild/character profiles for meta reference.
 - [ ] **wowaudit** connector (optional) — team-key roster enrichment.
 
@@ -325,7 +353,8 @@ These are derived from the existing geekxflood projects; deviating breaks the ho
 
 ### Phase 6 — Optimizer
 
-- [ ] `internal/optimizer` — objective function (§4.2), coverage evaluation, role constraints.
+- [ ] `internal/optimizer` — objective function (§4.2): structural hard constraints + soft weighted
+      capability coverage + empirical kill-comp prior. Role constraints.
 - [ ] Heuristic solver (greedy + local search) first.
 - [ ] Exact solver (ILP via a Go LP lib, or custom branch-and-bound) behind a flag.
 - [ ] Gap analysis / recruitment suggestions.

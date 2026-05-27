@@ -26,6 +26,8 @@ because each boss weights the objective differently.
 | Performance / best-spec    | **Warcraft Logs API** (v2 GraphQL, OAuth2 client-credentials)                     |
 | Composition/meta reference | **Raider.IO API** (guild progression + comp reference)                            |
 | Buff/debuff data           | **Static, researched** dataset in `data/` (Midnight seed in §3.3)                 |
+| Capabilities model         | Unified, data-driven capabilities (lust/brez/dispels/interrupts/soaks/immunities/…); providers scoped player/race/class/spec; **open registry** — new spells/caps for future seasons are data, not code |
+| Constraint hardness        | Only **structural legality** is hard (size 20, role mins, slot, spec eligibility). Capability coverage is **soft/weighted, never a blocker**; comps proven in WCL kill logs are prioritized over the theoretical "ideal" |
 | Frontend                   | **Next.js** (monorepo `frontend/`, mirroring cartomancer)                         |
 | Game target                | **Midnight Season 1**, via a **version-agnostic, data-driven engine**             |
 | Solver                     | **Both, switchable** — heuristic for live UI, exact (ILP/B&B) for "prove optimal" |
@@ -70,19 +72,43 @@ for **Midnight (patch 12.x)** and must be re-verified each major patch.
 | Mystic Touch  | **Monk**         | +5% physical damage taken                                                |
 | Hunter's Mark | **Hunter**       | +3% all damage taken (Midnight change: now consistent uptime, raid-wide) |
 
-**Critical utility** (count / presence matters):
+**Capabilities** (the unified utility model — presence/count, *not* throughput). Every
+boss-relevant ability is a **capability**: a named entry that some providers grant and that a
+boss can prioritize. This replaces the old separate lists — lust, battle res, dispels,
+interrupts, soaks, immunities, raid defensives, movement are all capabilities — with one
+**open, data-driven registry**: a capability is just an ID + provider rules in `data/`, so a new
+spell or mechanic in a future season is *added as data, never code* (see §3.7).
 
-| Category                                                                             | Providers (Midnight)                                                                                 | Optimizer use                                      |
-| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| **Bloodlust/Heroism**                                                                | Shaman (Bloodlust/Heroism), Mage (Time Warp), Hunter pet (Primal Rage), Evoker (Fury of the Aspects) | Require ≥1; redundancy valued for wipe recovery    |
-| **Battle Resurrection**                                                              | Druid (Rebirth), Warlock (Soulstone), Death Knight (Raise Ally), Paladin (Intercession)              | Count matters — more brez = more mistakes survived |
-| Dispels by school (Magic/Curse/Poison/Disease) + Enrage soothe                       | varies                                                                                               | Some bosses hard-require a specific dispel         |
-| Raid defensive CDs (Barrier, Darkness, Spirit Link, Rallying Cry, Aura Mastery, AMZ) | varies                                                                                               | Survive scripted raid-damage windows               |
-| Immunities / soaks / external CDs / interrupts / movement                            | varies                                                                                               | Boss-mechanic specific                             |
+*Capabilities are soft.* They are **strong weighted priorities, never hard blockers** — a comp is
+never rejected for missing one (§4). Only structural legality (§3.2) is hard.
 
-> Sourced from Icy Veins (Midnight raid-buff coverage), Wowpedia (Bloodlust/battle-res
-> provider lists). The `data/` table is the single source of truth; this matrix is its
-> seed for Midnight S1.
+*Provider scope* — a capability is granted at one of four scopes; a player's capability set for a
+given spec assignment is the union across all four:
+
+- **spec** — only some specs of a class (talent/spec-gated).
+- **class** — any spec of the class.
+- **race** — derived from the character's race (e.g. Arcane Torrent → interrupt). Race comes from Blizzard.
+- **player** — manually declared (professions, one-offs Blizzard doesn't expose).
+
+*Dispels carry a direction axis*: **friendly** (cleanse a debuff off an ally, by school
+Magic/Curse/Poison/Disease) vs **offensive** (strip a beneficial/enrage effect *off an enemy* —
+purge / spellsteal / soothe). Distinct capabilities; a boss can prioritize either.
+
+Midnight seed (illustrative; `data/` is authoritative, re-verified each patch):
+
+| Capability (id)                                | Providers (Midnight, illustrative)                                                |
+| ---------------------------------------------- | --------------------------------------------------------------------------------- |
+| `lust`                                         | Shaman (Bloodlust/Heroism), Mage (Time Warp), Hunter pet (Primal Rage), Evoker    |
+| `battle_rez`                                   | Druid, Warlock, Death Knight, Paladin                                             |
+| `dispel.friendly.{magic,curse,poison,disease}` | by class/spec                                                                     |
+| `dispel.offensive.magic`                       | Mage (Spellsteal), Priest (Dispel Magic), Shaman (Purge)                          |
+| `dispel.offensive.enrage`                      | Druid (Soothe), Hunter (Tranq Shot)                                              |
+| `interrupt`                                    | most melee/caster specs; Blood Elf (Arcane Torrent)                              |
+| `raid_defensive`                               | Priest Barrier, DH Darkness, Shaman Spirit Link, Warrior Rallying Cry, Pally Aura Mastery, DK AMZ |
+| `immunity` / `soak` / `external_cd` / `movement` | varies                                                                          |
+
+> Provider lists seeded for Midnight S1 from Icy Veins / Warcraft Wiki; `data/` is authoritative.
+> A capability only influences selection when it is **scarce** — one every player has doesn't.
 
 ### 3.4 Boss profile
 
@@ -91,7 +117,7 @@ Each boss carries weights/flags that reshape the objective:
 - Damage-pattern weights: single-target vs cleave vs sustained-AoE.
 - Magic-vs-physical raid-damage split → sets the relative value of Chaos Brand vs Mystic Touch.
 - Healing intensity → drives healer count (4 / 5 / 6).
-- Required or strongly-valued utility: specific dispels, immunities, soak count, lust timing, expected brez count.
+- **Capability priorities** (§3.3): the capabilities this boss values, each with a **weight** and optional target count (e.g. `dispel.offensive.magic` weighted high, `≥1`). Soft preferences, not gates — missing one lowers score, never disqualifies (§4).
 - Per-boss meta-spec rankings (a spec can be S-tier on a council fight and C-tier on a patchwerk).
 
 ### 3.5 Player performance
@@ -100,31 +126,59 @@ Per player × spec × boss: a throughput score from Warcraft Logs parse percenti
 (or sim-normalized DPS/HPS). Falls back to spec meta-average when a player has no logs
 on that boss.
 
+### 3.6 Empirical composition prior (proven kills outrank theory)
+
+Theory says what *should* work; the logs say what *did*. Per boss, raidforge pulls from Warcraft
+Logs the **class/spec makeup of real successful kills** (not just individual parses) and rewards
+candidate comps that resemble these proven, boss-killing compositions. A comp that has
+demonstrably downed the boss is preferred *even if it lacks an "ideal" capability* — the kill log
+is ground truth. This is a weighted objective term (§4, `w_empirical`) that can be tuned to
+**outweigh** theoretical capability coverage. Raider.IO comp data is a secondary signal of the
+same kind.
+
+### 3.7 Versioning & future content (future-proof by construction)
+
+The domain is patch-volatile, so all of it is versioned **data**, never Go code:
+
+- **Open capability registry** — a capability is just an ID + provider rules in `data/`. A new
+  spell, ability, or mechanic in Midnight S2 (or any later tier) is added as *data*; the engine
+  enumerates no specific capability, class, or boss in code.
+- **Per-tier datasets** — `data/tiers/<expansion>-s<n>/` holds each tier's boss list + profiles;
+  the coverage/capability matrix is versioned per patch. A new season = new data files, no recode.
+- **Stable generic types** — `Capability{id, providers, spells}`, `BossProfile{weights,
+  capabilityPriorities[]}` and friends are content-agnostic.
+- The active tier/patch dataset is selected by config.
+
 ## 4. Optimization engine
 
 **Decision variables:** select a subset of roster players (= raid size) and assign each
 an eligible spec.
 
-**Hard constraints:** exact raid size (20); tank/healer minimums; one player ≤ one slot;
-spec ∈ player's eligible set; any boss-flagged *mandatory* coverage.
+**Hard constraints (structural legality only):** exact raid size (20); tank/healer minimums; one
+player ≤ one slot; spec ∈ player's eligible set. **Capability coverage is *not* hard** — it is a
+weighted objective term, so a comp is never rejected for missing a capability (a comp that killed
+the boss in the logs must stay selectable).
 
 **Objective (maximize), per boss:**
 
 ```txt
 score = Σ player_throughput(spec, boss)
-      + w_buff   · buff_coverage_completeness
-      + w_debuff · (chaos_brand?·magicWeight + mystic_touch?·physWeight)
-      + w_meta   · meta_alignment(chosen specs, boss)
-      + w_util   · satisfied_optional_utility
-      − penalties(missing soft coverage, role imbalance, benching a top performer)
+      + w_buff      · buff_coverage_completeness
+      + w_debuff    · (chaos_brand?·magicWeight + mystic_touch?·physWeight)
+      + w_meta      · meta_alignment(chosen specs, boss)
+      + w_caps      · Σ capability_weight(boss) · satisfied?         // soft — never a gate
+      + w_empirical · similarity(comp, proven WCL kill comps)        // §3.6 — can be set to dominate
+      − penalties(role imbalance, benching a top performer)
 ```
 
-Weights live in CUE config, tunable without code changes.
+Weights — including `w_caps` and `w_empirical` — live in CUE config, tunable without code changes.
+Setting `w_empirical` high makes compositions proven in the logs outrank theoretical capability
+coverage, so raidforge never insists on a textbook comp the data contradicts.
 
-**Gap analysis / recruitment suggestions:** if no legal full comp exists, or the best
-comp leaves a hard/high-value gap, report the **marginal value of adding archetype X**
-("Add a Demon Hunter → unlocks Chaos Brand, ~+4% raid magic damage on this boss";
-"Add any Curse dispeller → fight mechanic requires it").
+**Gap analysis / recruitment suggestions:** when the roster can't field a legal 20 (structural)
+or the best comp leaves a high-value capability gap, report the **marginal value of adding
+archetype X** ("Add a Demon Hunter → unlocks Chaos Brand, ~+4% raid magic damage"; "Add a Curse
+dispeller → this boss values it heavily"). Framed as score gains, never hard blockers.
 
 **Solvers (switchable):**
 
@@ -141,7 +195,8 @@ raidforge authenticates users via **Battle.net OAuth2** (Authorization Code gran
 `wow.profile`). On login we:
 
 1. Call the **Account Profile Summary** (`/profile/user/wow`, user token + `wow.profile`)
-   to enumerate **all the user's WoW characters** (name, realm, class, level).
+   to enumerate **all the user's WoW characters** (name, realm, class, race, level). *Race* feeds
+   race-scoped capabilities (§3.3).
 2. For each character of interest, resolve its **guild** via the Character Profile, then
    pull the **Guild Roster** (`/data/wow/guild/{realm}/{guild}/roster`, client-credential
    token) to get the full member list.
@@ -169,16 +224,17 @@ rate-limit-aware). Sources, each owning a distinct slice of the problem:
 
 | Connector                       | Owns                                                                                                                     | Auth                                                              | Notes                                                                                       |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| **Blizzard** (SSO + WoW Profile)| **Identity + roster** — the user's characters, their guild(s), guild member list, per-character talented specs           | OAuth2: user token (`wow.profile`) + client-credential token      | Primary roster source; see §5.1–5.2. Region-aware (`profile-{region}` namespace)            |
+| **Blizzard** (SSO + WoW Profile)| **Identity + roster** — the user's characters, their guild(s), guild member list, per-character talented specs + race           | OAuth2: user token (`wow.profile`) + client-credential token      | Primary roster source; see §5.1–5.2. Region-aware (`profile-{region}` namespace)            |
 | **wowaudit** (optional)         | **Roster enrichment** — willing/alt specs, attendance, roles the guild already tracks                                    | Per-team API key (Bearer)                                         | Augments Blizzard data with info Blizzard doesn't expose; user connects their team key      |
 | **Raider.IO**                   | **Composition/meta reference** — guild raid progression and the comps top guilds run                                     | Public API, key optional                                          | Informs per-boss meta rankings and "what comps work" sanity checks                          |
-| **Warcraft Logs** (v2 GraphQL)  | **Best specs & performance** — per-player/per-boss parse percentiles, spec meta statistics                               | OAuth2 client-credentials (`WCL_CLIENT_ID` / `WCL_CLIENT_SECRET`) | Point-based rate limits → cache aggressively, batch queries. The primary "best spec" signal |
+| **Warcraft Logs** (v2 GraphQL)  | **Best specs & performance** — per-player/per-boss parse percentiles, spec meta statistics, plus the class/spec makeup of real kills (empirical comp prior, §3.6)                               | OAuth2 client-credentials (`WCL_CLIENT_ID` / `WCL_CLIENT_SECRET`) | Point-based rate limits → cache aggressively, batch queries. The primary "best spec" signal |
 | **Static `data/`** (researched) | **Coverage matrix** — raid buffs/debuffs, lust, brez, utility (see §3.3); class/spec list; boss list + profiles per tier | none (ships in repo)                                              | Single source of truth for buff/debuff; versioned per patch                                 |
 
 **Flow:** Blizzard SSO defines *who's in the roster and what specs they have* → wowaudit/manual
 add *what they're willing to play* → Warcraft Logs scores *how well each plays each spec per
 boss* → Raider.IO + static meta rankings inform *what's good on this boss* → the static coverage
-matrix enforces *buff/debuff/utility completeness*. The optimizer (§4) combines all per boss.
+matrix scores *buff/debuff/utility coverage* (soft), and Warcraft Logs' real kill comps bias toward
+what *actually works* (§3.6). The optimizer (§4) combines all per boss.
 
 **Credential model:** Blizzard needs a registered API client (`BLIZZARD_CLIENT_ID` /
 `BLIZZARD_CLIENT_SECRET`, deployment secrets) — used for both the OAuth login redirect and
