@@ -3,8 +3,7 @@ extends: default
 # Helm templates use {{ }} Go template syntax which yamllint cannot parse.
 # helm lint covers those files; exclude them here.
 ignore: |
-  charts/droidfarm/templates/
-  examples/ci/
+  chart/templates/
 
 rules:
   line-length:

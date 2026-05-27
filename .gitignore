@@ -10,4 +10,4 @@ node_modules/
 *.tmp
 *.temp
 .claude
-CLAUDE*
+CLAUDE.local.md
