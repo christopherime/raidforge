@@ -110,7 +110,14 @@ Midnight seed (illustrative; `data/` is authoritative, re-verified each patch):
 > Provider lists seeded for Midnight S1 from Icy Veins / Warcraft Wiki; `data/` is authoritative.
 > A capability only influences selection when it is **scarce** — one every player has doesn't.
 
-### 3.4 Boss profile
+### 3.4 Seasons, raids, and boss profiles
+
+A **season** (content tier, e.g. Midnight S1) ships **multiple raids**, and raids **release on a
+staggered schedule** — some are live while others are still upcoming, and in later seasons/patches
+they arrive on different patches. The model is therefore **Season → Raids → Bosses**: a season
+lists its raids; each raid has a **release status** (`released` | `upcoming`, with an optional
+patch/date) and its own ordered bosses. The optimizer runs per boss, over the bosses of the
+*released* raids the user selects.
 
 Each boss carries weights/flags that reshape the objective:
 
@@ -143,10 +150,13 @@ The domain is patch-volatile, so all of it is versioned **data**, never Go code:
 - **Open capability registry** — a capability is just an ID + provider rules in `data/`. A new
   spell, ability, or mechanic in Midnight S2 (or any later tier) is added as *data*; the engine
   enumerates no specific capability, class, or boss in code.
-- **Per-tier datasets** — `data/tiers/<expansion>-s<n>/` holds each tier's boss list + profiles;
-  the coverage/capability matrix is versioned per patch. A new season = new data files, no recode.
-- **Stable generic types** — `Capability{id, providers, spells}`, `BossProfile{weights,
-  capabilityPriorities[]}` and friends are content-agnostic.
+- **Per-season, multi-raid datasets** — `data/seasons/<expansion>-s<n>/` holds the season's
+  **raids**, each under `raids/<raid>/` with its bosses + a release status (`released` | `upcoming`);
+  raids can go live on different patches. The coverage/capability matrix is versioned per patch.
+  A new raid, season, or patch = new data files, no recode.
+- **Stable generic types** — `Season{raids}`, `Raid{release, bosses}`, `Boss{profile}`,
+  `Capability{id, providers, spells}`, `BossProfile{weights, capabilityPriorities[]}` and friends
+  are content-agnostic.
 - The active tier/patch dataset is selected by config.
 
 ## 4. Optimization engine

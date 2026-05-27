@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 raidforge computes the **optimal 20-player Mythic World of Warcraft raid composition, per boss**,
 from a guild's real roster, Warcraft Logs performance, and a researched raid buff/debuff +
 capability matrix — and emits bench lists and recruitment suggestions when the roster is short or
-missing coverage. Target game version: **Midnight, Season 1** (raid: Voidspire).
+missing coverage. Target game version: **Midnight, Season 1**, which ships multiple raids on a staggered release schedule (data model: Season → Raids → Bosses with per-raid release status; SPEC §3.4).
 
 ## Status: implementation in progress (toward the v0.5.0 MVP)
 

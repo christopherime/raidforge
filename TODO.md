@@ -123,9 +123,11 @@ Midnight seed (illustrative; `data/` authoritative, re-verify each patch):
 
 > Only **scarce** capabilities sway the comp; ones every player has (generic soaks, potions) don't.
 
-### 3.6 Boss profile (per boss, in `data/`)
+### 3.6 Seasons, raids & boss profiles
 
-Each boss carries weights/flags that reshape the optimizer objective:
+A **season** ships **multiple raids** with **staggered release** (Season 1 = 3 raids, a 4th soon);
+the model is **Season → Raids → Bosses**, each raid carrying a release status (`released` |
+`upcoming`). Each boss carries weights/flags that reshape the optimizer objective:
 
 - Damage-pattern weights: single-target vs cleave vs sustained-AoE.
 - Magic-vs-physical raid-damage split → sets relative value of Chaos Brand vs Mystic Touch.
@@ -133,9 +135,10 @@ Each boss carries weights/flags that reshape the optimizer objective:
 - **Capability priorities** (§3.5): capabilities this boss values, each weighted + optional count (e.g. `dispel.offensive.magic` high, `≥1`). **Soft, not gates.** Plus lust timing, expected brez.
 - Per-boss meta-spec rankings (a spec can be S-tier on one boss, C-tier on another).
 
-> **Research gap:** the **Voidspire** (Midnight S1) boss list and per-boss profiles — including each
-> boss's weighted capability priorities — still need sourcing/curation. The buff/debuff + capability
-> *provider* matrix is verified; boss *requirements* are TBD content.
+> **Research gap:** the **Midnight S1 raids** (Voidspire + the other Season-1 raids, with a 4th
+> upcoming) — their boss lists, release status, and per-boss profiles/capability priorities — still
+> need sourcing/curation. The buff/debuff + capability *provider* matrix is verified; raid/boss
+> content is TBD.
 
 ### 3.7 Empirical prior & future-proofing
 
@@ -143,9 +146,10 @@ Each boss carries weights/flags that reshape the optimizer objective:
   that resemble them (`w_empirical`); this can outweigh theoretical capability coverage. Capability
   coverage is **soft, never a hard blocker** — a comp that killed the boss in the logs must stay
   selectable.
-- **Future content = data, not code.** Capabilities are an open ID registry in `data/`; tiers live
-  under `data/tiers/<expansion>-s<n>/`. Adding Midnight S2 (new bosses, spells, capabilities) is a
-  data change. Go types stay generic (`Capability`, `BossProfile`), so no hard recode per season.
+- **Future content = data, not code.** Capabilities are an open ID registry in `data/`; seasons
+  live under `data/seasons/<expansion>-s<n>/` and hold multiple `raids/<raid>/` (each with a
+  release status). Adding a raid, Midnight S2, or new spells is a data change. Go types stay
+  generic (`Season`, `Raid`, `Boss`, `Capability`, `BossProfile`), so no hard recode per season.
 
 ---
 
@@ -321,9 +325,10 @@ These are derived from the existing geekxflood projects; deviating breaks the ho
       class/spec/race/manual) lives here.
 - [ ] `data/classes.{cue,json}` — 13 classes, specs, roles, **race→capability** table.
 - [ ] `data/coverage.{cue,json}` — §3.3–3.5 incl. the **capabilities → providers** registry (Midnight seed).
-- [ ] `data/tiers/midnight-s1/bosses.{cue,json}` — Voidspire boss list + per-boss profiles (§3.6),
-      each with **weighted capability priorities** (soft). **Needs content research/curation**
-      (boss list, magic/phys weights, healer counts).
+- [ ] `data/seasons/midnight-s1/` — the season's **raids** under `raids/<raid>/bosses.{cue,json}`
+      (Voidspire + the other S1 raids, each with a release status), per-boss profiles (§3.6) with
+      **weighted capability priorities** (soft). **Needs content research/curation** (raid + boss
+      lists, release status, magic/phys weights, healer counts).
 - [ ] Loader + validation (fail fast on malformed data).
 
 ### Phase 3 — Authentication (Blizzard SSO)

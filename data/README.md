@@ -11,9 +11,11 @@ Planned layout:
   race → capability table.
 - `coverage.{cue,json}` — raid stat buffs, damage-amp debuffs, and the **capabilities**
   registry (capability id → providers, scoped spec/class/race/player). See SPEC §3.3.
-- `tiers/<expansion>-s<n>/bosses.{cue,json}` — per-tier boss list and per-boss profiles
-  (damage/heal weights, magic-vs-physical split, weighted capability priorities). The
-  first tier is `tiers/midnight-s1/` (raid: **Voidspire**). See SPEC §3.4.
+- `seasons/<expansion>-s<n>/raids/<raid>/bosses.{cue,json}` — a **season** holds **multiple
+  raids** (released on a staggered schedule); each raid has a release status and its own ordered
+  bosses with per-boss profiles (damage/heal weights, magic-vs-physical split, weighted
+  capability priorities). The first season is `seasons/midnight-s1/` (raids: **Voidspire** +
+  others). See SPEC §3.4.
 
 Each dataset ships with a CUE schema; the loader validates data against it and fails fast
 on malformed input. Capability ids are an **open registry** — new spells or mechanics are
