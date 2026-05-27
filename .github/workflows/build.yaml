@@ -1,0 +1,60 @@
+name: Build & Push image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+    paths-ignore:
+      - "**.md"
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # Only GitHub-authored actions are used (actions/*); the runner's
+      # preinstalled Docker handles build/login/push via plain shell so we
+      # don't depend on third-party (docker/*) actions being downloadable.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and push image
+        env:
+          REGISTRY: ghcr.io
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          image="$REGISTRY/$(echo "$REPO" | tr '[:upper:]' '[:lower:]')"
+          short_sha="${SHA::7}"
+          stamp="$(date -u +%Y%m%d-%H%M%S)"
+
+          # Always tag latest, the short SHA, and a build timestamp.
+          # On a git tag push (REF_TYPE=tag), also tag the image with the
+          # version (e.g. v1.0.0) so releases get an immutable, named image.
+          tags=(-t "$image:latest" -t "$image:$short_sha" -t "$image:$stamp")
+          if [ "$REF_TYPE" = "tag" ]; then
+            tags+=(-t "$image:$REF_NAME")
+          fi
+
+          echo "$GHCR_TOKEN" | docker login "$REGISTRY" -u "$ACTOR" --password-stdin
+
+          docker build --build-arg BUILD_REF="$short_sha" "${tags[@]}" .
+
+          docker push "$image:latest"
+          docker push "$image:$short_sha"
+          docker push "$image:$stamp"
+          if [ "$REF_TYPE" = "tag" ]; then
+            docker push "$image:$REF_NAME"
+          fi
