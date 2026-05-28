@@ -56,7 +56,7 @@ your best players. raidforge does that math for you, every pull.
    ┌───────────────────────────┐         ┌───────────────────────────────┐
    │  Warcraft Logs (v2 GQL)   │  how    │  Static data/  (versioned)    │  what's
    │  per player/spec/boss     │  good   │  buff·debuff·lust·brez matrix │  required
-   │  parse percentiles        │  ─────► │  + per-boss profiles          │  ─────────┐
+   │  parse percentiles        │  ─────► │  + per-boss profiles           │  ─────────┐
    └───────────────────────────┘         └───────────────────────────────┘           │
                           │                                                          │
                           │   Raider.IO ─ meta / comp reference ─────────────────────┤
