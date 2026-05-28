@@ -15,14 +15,17 @@ Versioning is semver, tagged from `v0.0.1`. **v0.5.0** = a working MVP (domain d
 API over a sample roster); **v1.0.0** = first stable release with all components (auth, connectors,
 persistence, frontend). The phased plan is in `TODO.md` (Phase 0–11).
 
-The design is the source of truth — read both before changing behaviour:
+The design is the source of truth — read these before changing behaviour:
+- **`docs/HANDOFF.md`** — **read first.** Current snapshot: tags shipped, what's in flight, research data already gathered, exactly what to build next, and the design rules that took multiple rounds to settle.
 - **`docs/SPEC.md`** — design ("what & why"): domain model, capabilities, optimizer objective, connectors, API.
 - **`TODO.md`** — build playbook ("how"): conventions, gotchas, external-API notes, ordered phases.
 
-What exists so far: the Go backend scaffold (`backend/`, module `github.com/christopherime/raidforge`)
-— a minimal HTTP server with `/healthz` — plus build tooling (Makefile, multi-stage Dockerfile) and
-the `data/` dataset plan. The optimizer, domain data, connectors, auth, persistence and frontend are
-not built yet.
+What exists so far (see `docs/HANDOFF.md` for the live snapshot):
+- `v0.0.1` — scaffold (Go module, `GET /healthz`, Makefile, multi-stage Dockerfile).
+- `v0.1.0` — CUE-backed config + server foundation (stdlib mux, request-logging & panic-recovery middleware, slog logger, graceful shutdown, tunable optimizer weights).
+- `v0.2.0` Round 1 (committed, not yet tagged) — `internal/domain` core types: `Role`, `Spec`, `Class`, `Race`, `Player`, `Buff`, `Debuff`, `Providers`, `Capability`, `Coverage` with `Coverage.ResolveCapabilities(player, spec)`.
+
+What's NOT built yet: the rest of `v0.2.0` (season/raid/boss types, `data/` content + CUE-validated loader, config `data.tier` → `data.season` rename), the optimizer, roster ingest, connectors, auth, persistence, and frontend.
 
 ## Architecture (target — see SPEC.md §6 for the full tree)
 
